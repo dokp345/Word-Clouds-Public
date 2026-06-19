@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Word Clouds Platform</title>
+    <!-- IBM Plex Sans Thai Google Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Tailwind CSS for high-fidelity UI layout -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Word Cloud Engine -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/wordcloud2.js/1.2.2/wordcloud2.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"IBM Plex Sans Thai"', 'sans-serif'],
+                        serif: ['"IBM Plex Sans Thai"', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Modern scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        /* Muted colors directly matching image_fc30ca.png */
+        .color-pastel-coral { background-color: #fca5a5; }
+        .color-pastel-peach { background-color: #fed7aa; }
+        .color-pastel-yellow { background-color: #fef08a; }
+        .color-pastel-mint { background-color: #a7f3d0; }
+        .color-pastel-sky { background-color: #bae6fd; }
+        .color-pastel-lavender { background-color: #c7d2fe; }
+
+        /* Smooth Canva-like hover scale */
+        .transition-canva {
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+    </style>
+</head>
+<body class="bg-[#faf9f6] text-[#1e293b] min-h-screen font-sans flex flex-col justify-between selection:bg-pink-100 selection:text-pink-900">
+
+    <!-- ================= STREAMING_CHUNK: Google Apps Script Reference Guide ================= -->
+    <div id="gasCodeGuide" class="bg-slate-900 text-slate-300 text-xs p-4 border-b border-slate-800 hidden">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <p class="font-bold text-white text-sm"><i class="fa-solid fa-code-branch mr-2 text-teal-400"></i>Google Workspace Integration Active</p>
+                <p class="text-slate-400 mt-1">Deploy this Google Apps Script code inside your corporate spreadsheet script editor (**Extensions > Apps Script**).</p>
+            </div>
+            <button onclick="toggleCodeBlock()" class="bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold px-4 py-2 rounded transition-canva shrink-0">
+                View/Copy Code.gs
+            </button>
+        </div>
+        <div id="gasCodeContent" class="max-w-7xl mx-auto mt-4 hidden">
+            <pre class="bg-slate-950 p-4 rounded border border-slate-800 text-slate-200 overflow-x-auto select-all">
+/* =========================================
+   Code.gs - Paste in Google Apps Script Editor
+   ========================================= */
+
+function doGet(e) {
+  return HtmlService.createHtmlOutputFromFile('Index')
+      .setTitle('Word Clouds')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+}
+
+// Automatically detect the correct script URL to build QR Codes
+function getWebAppUrl() {
+  try {
+    return ScriptApp.getService().getUrl();
+  } catch(e) {
+    return "";
+  }
+}
+
+// Appends submissions to Google Sheet: GameData
+function submitParticipantWord(pin, question, limit, word, participantId) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("GameData");
+    if (!sheet) {
+      sheet = ss.insertSheet("GameData");
+      sheet.appendRow(["RoomPIN", "HostQuestion", "TimeLimit", "Timestamp", "Word", "ParticipantID"]);
+    }
+    
+    var cleanWord = word.toString().trim();
+    if (cleanWord.length > 0 && cleanWord.length <= 20) {
+      sheet.appendRow([pin, question, limit, new Date(), cleanWord, participantId]);
+      return { status: "success" };
+    }
+    return { status: "error", message: "Word length must be under 20 characters." };
+  } catch(err) {
+    return { status: "error", message: err.toString() };
+  }
+}
+
+// Pulls live statistics to compute active cloud counts
+function getHostLiveData(pin) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("GameData");
+    if (!sheet) return { words: [], participantCount: 0, question: "", limit: 60 };
+    
+    var rows = sheet.getDataRange().getValues();
+    var wordCounts = {};
+    var uniqueParticipants = new Set();
+    var question = "";
+    var limit = 60;
+    
+    for (var i = 1; i < rows.length; i++) {
+      if (rows[i][0].toString() === pin.toString()) {
+        if (!question && rows[i][1]) question = rows[i][1];
+        if (rows[i][2]) limit = Number(rows[i][2]);
+        var word = rows[i][4];
+        var pId = rows[i][5];
+        if (word) {
+          var clean = word.toLowerCase().trim();
+          wordCounts[clean] = (wordCounts[clean] || 0) + 1;
+        }
+        if (pId) uniqueParticipants.add(pId);
+      }
+    }
+    
+    var wordList = [];
+    for (var key in wordCounts) {
+      wordList.push([key, wordCounts[key]]);
+    }
+    return { words: wordList, participantCount: uniqueParticipants.size, question: question, limit: limit };
+  } catch(err) {
+    return { words: [], participantCount: 0, question: "", limit: 60 };
+  }
+}
+
+// Archives the ended session details along with a visual screenshot directly into "GameArchive" sheet
+function saveSessionSummary(pin, question, limit, dateLaunched, base64Image) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("GameArchive");
+    if (!sheet) {
+      sheet = ss.insertSheet("GameArchive");
+      sheet.appendRow(["RoomPIN", "HostQuestion", "TimeLimit", "DateLaunched", "TimestampEnded", "Screenshot"]);
+      // Style headers
+      sheet.getRange(1, 1, 1, 6).setFontWeight("bold").setBackground("#cbd5e1");
+    }
+    
+    var cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
+    var blob = Utilities.newBlob(Utilities.base64Decode(cleanBase64), 'image/jpeg', 'screenshot_pin_' + pin + '.jpg');
+    
+    var lastRow = sheet.getLastRow();
+    var newRow = lastRow + 1;
+    
+    // Append descriptive row metadata
+    sheet.appendRow([pin, question, limit, new Date(dateLaunched), new Date(), "Image Inserted Floating Beside"]);
+    
+    // Set a matching tall height for the row to accommodate the floating image beautifully
+    sheet.setRowHeight(newRow, 110);
+    
+    // Insert the screenshot image floating inline beside metadata row in Column F (6)
+    sheet.insertImage(blob, 6, newRow);
+    
+    return { status: "success" };
+  } catch(err) {
+    return { status: "error", message: err.toString() };
+  }
+}
+            </pre>
+        </div>
+    </div>
+
+    <!-- ================= STREAMING_CHUNK: Rendering the site header ================= -->
+    <header class="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-40 px-6 py-4">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-3 cursor-pointer" onclick="goHome()">
+                <!-- Brand logo with timeline-like circular palette accents of image_fc30ca.png -->
+                <div class="flex gap-1">
+                    <span class="w-3 h-3 rounded-full color-pastel-coral block"></span>
+                    <span class="w-3 h-3 rounded-full color-pastel-peach block"></span>
+                    <span class="w-3 h-3 rounded-full color-pastel-sky block"></span>
+                </div>
+                <span class="font-extrabold text-lg tracking-tight text-slate-800">Word Clouds</span>
+            </div>
+            
+            <div id="workspaceIndicator" class="p-2 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center">
+                <span id="workspaceIndicatorDot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ================= STREAMING_CHUNK: Mounting App Views ================= -->
+    <main class="flex-grow max-w-7xl w-full mx-auto p-4 md:p-8 flex flex-col items-center justify-center">
+
+        <!-- CRASH / SESSION RECOVERY NOTIFICATION BAR -->
+        <div id="autoRecoveryBanner" class="w-full max-w-xl mb-6 bg-amber-50 border border-amber-200 text-amber-900 p-4 rounded-2xl shadow-sm hidden justify-between items-center gap-4">
+            <div class="flex items-center gap-3 text-sm">
+                <i class="fa-solid fa-triangle-exclamation text-amber-600 text-lg animate-bounce"></i>
+                <div>
+                    <p class="font-bold">Accidental Disconnection Detected</p>
+                    <p class="text-xs text-amber-700 mt-0.5">We found an unfinished live session (<span id="recoveryPinLabel" class="font-bold font-mono"></span>).</p>
+                </div>
+            </div>
+            <div class="flex gap-2 shrink-0">
+                <button onclick="dismissRecovery()" class="text-xs font-bold text-amber-700 hover:text-amber-950 px-3 py-2 rounded-lg transition-canva">Dismiss</button>
+                <button onclick="performRecovery()" class="text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-lg transition-canva shadow-sm">Restore Game</button>
+            </div>
+        </div>
+
+        <!-- 1. ROOT VIEW: ROLE SELECTION -->
+        <section id="roleSelectorView" class="w-full max-w-lg bg-white p-8 md:p-12 rounded-3xl border border-slate-100 shadow-xl/5 text-center space-y-8">
+            <div class="space-y-3">
+                <h1 class="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 font-serif">Interactive Brainstorms</h1>
+                <p class="text-slate-500 text-sm md:text-base">presented by Thai AirAsia (Training Management Center)</p>
+            </div>
+
+            <!-- Visual representation accent bar mimicking image_fc30ca.png layout -->
+            <div class="flex justify-center items-center gap-2 py-4">
+                <div class="h-1.5 w-16 rounded-full color-pastel-coral"></div>
+                <div class="h-1.5 w-12 rounded-full color-pastel-peach"></div>
+                <div class="h-1.5 w-8 rounded-full color-pastel-yellow"></div>
+                <div class="h-1.5 w-12 rounded-full color-pastel-mint"></div>
+                <div class="h-1.5 w-20 rounded-full color-pastel-sky"></div>
+            </div>
+
+            <div class="flex flex-col gap-3">
+                <button onclick="showHostView()" class="w-full p-4 rounded-2xl font-bold bg-[#121212] hover:bg-slate-800 text-white transition-canva hover:-translate-y-0.5 shadow-md">
+                    Host Word Clouds
+                </button>
+                <button onclick="showParticipantPortal()" class="w-full p-4 rounded-2xl font-bold bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-sm transition-canva hover:-translate-y-0.5">
+                    Join as Participant
+                </button>
+            </div>
+        </section>
+
+        <!-- 2. HOST SETUP & VIEW CONFIGURE SCREEN -->
+        <section id="hostSetupView" class="w-full max-w-xl bg-white p-8 rounded-3xl border border-slate-100 shadow-lg hidden space-y-6">
+            
+            <!-- Navigation Tabs for New Setup vs Session Recovery -->
+            <div class="flex border-b border-slate-100">
+                <button onclick="switchSetupTab('new')" id="tabBtnNew" class="flex-1 pb-4 text-sm font-bold text-slate-800 border-b-2 border-slate-900 text-center transition-canva">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs text-slate-400"></i>Create New Session
+                </button>
+                <button onclick="switchSetupTab('resume')" id="tabBtnResume" class="flex-1 pb-4 text-sm font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 text-center transition-canva">
+                    <i class="fa-solid fa-clock-rotate-left mr-1.5 text-xs text-slate-400"></i>Resume Active Session
+                </button>
+            </div>
+
+            <!-- PANEL A: CREATE NEW WORD CLOUD -->
+            <div id="panelNewSession" class="space-y-6">
+                <!-- Question Formulation Input -->
+                <div class="space-y-2">
+                    <div class="flex justify-between items-center">
+                        <label class="text-xs font-bold text-slate-500 uppercase tracking-wider block">1. Enter Live Question / Prompt</label>
+                        <span id="charCountDisplay" class="text-xs text-slate-400">0/120</span>
+                    </div>
+                    <textarea id="hostQuestion" maxlength="120" rows="3" placeholder="e.g., What word best describes your team's objective for Q3?" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-400 text-sm transition-canva"></textarea>
+                </div>
+
+                <!-- Timer Selector (image_fc30ca.png styled pills) -->
+                <div class="space-y-3">
+                    <label class="text-xs font-bold text-slate-500 uppercase tracking-wider block">2. Select Time Limitation</label>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <button type="button" onclick="selectTimeLimit(30, 'btn-30s')" id="btn-30s" class="time-btn p-3 rounded-xl border border-slate-200 text-xs font-semibold hover:bg-slate-50 hover:border-slate-400 transition-canva">30 Seconds</button>
+                        <button type="button" onclick="selectTimeLimit(60, 'btn-1m')" id="btn-1m" class="time-btn p-3 rounded-xl border border-slate-200 text-xs font-semibold hover:bg-slate-50 hover:border-slate-400 transition-canva">1 Minute</button>
+                        <button type="button" onclick="selectTimeLimit(300, 'btn-5m')" id="btn-5m" class="time-btn p-3 rounded-xl border border-slate-200 text-xs font-semibold hover:bg-slate-50 hover:border-slate-400 transition-canva">5 Minutes</button>
+                        <button type="button" onclick="selectTimeLimit(600, 'btn-10m')" id="btn-10m" class="time-btn p-3 rounded-xl border border-slate-200 text-xs font-semibold hover:bg-slate-50 hover:border-slate-400 transition-canva">10 Minutes</button>
+                    </div>
+                </div>
+
+                <!-- Web App Override URL input (Resolves custom corporate script redirections) -->
+                <div class="space-y-2">
+                    <label class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                        <span>3. Deployed Web App URL (Optional override)</span>
+                        <span class="text-[10px] text-slate-400 lowercase italic">For custom QR mapping</span>
+                    </label>
+                    <input type="text" id="customWebAppUrl" placeholder="https://script.google.com/macros/s/.../exec" class="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-sky-300">
+                </div>
+
+                <!-- Actions -->
+                <div class="flex gap-3 pt-4 border-t border-slate-100">
+                    <button onclick="goHome()" class="w-1/3 p-3.5 rounded-xl text-slate-600 hover:bg-slate-50 text-sm font-bold border border-slate-200 transition-canva">Cancel</button>
+                    <button onclick="launchPresenterScreen(false)" class="w-2/3 p-3.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-sm font-bold transition-canva hover:-translate-y-0.5 shadow-md">Launch Session</button>
+                </div>
+            </div>
+
+            <!-- PANEL B: RESUME DISCONNECTED SESSION -->
+            <div id="panelResumeSession" class="space-y-6 hidden">
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100 text-xs text-slate-500 space-y-1">
+                    <p class="font-bold text-slate-700"><i class="fa-solid fa-circle-info mr-1 text-sky-500"></i>How does recovery work?</p>
+                    <p>Enter the 4-digit PIN of your active presentation session below. The platform will automatically reconnect to the live database stream and resume the word cloud canvas.</p>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-xs font-bold text-slate-500 uppercase tracking-wider block">Enter Game PIN to Reconnect</label>
+                    <input type="text" id="resumePinInput" placeholder="e.g. 5432" maxlength="4" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-center font-bold tracking-widest text-2xl focus:outline-none focus:ring-2 focus:ring-sky-200">
+                </div>
+
+                <div class="flex gap-3 pt-4 border-t border-slate-100">
+                    <button onclick="goHome()" class="w-1/3 p-3.5 rounded-xl text-slate-600 hover:bg-slate-50 text-sm font-bold border border-slate-200 transition-canva">Cancel</button>
+                    <button onclick="attemptSessionResumption()" class="w-2/3 p-3.5 rounded-xl bg-[#121212] hover:bg-slate-800 text-white text-sm font-bold transition-canva hover:-translate-y-0.5 shadow-md">
+                        <i class="fa-solid fa-plug mr-1.5"></i>Reconnect Session
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. PRESENT VIEW SCREEN (The Presenter Monitor) -->
+        <section id="hostLiveMonitorView" class="w-full hidden space-y-6">
+            <!-- Top Dashboard: Kahoot & image_fc30ca.png styled PIN & QR Layout -->
+            <div class="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden">
+                <!-- Color tag accent row top -->
+                <div class="absolute top-0 left-0 right-0 h-1 flex">
+                    <span class="flex-1 color-pastel-coral"></span>
+                    <span class="flex-1 color-pastel-peach"></span>
+                    <span class="flex-1 color-pastel-yellow"></span>
+                    <span class="flex-1 color-pastel-mint"></span>
+                </div>
+
+                <!-- LEFT SIDE: ACTIVE QUESTION & TIMELINE TRACKER -->
+                <div class="flex-grow space-y-3 text-center md:text-left">
+                    <span class="text-[10px] font-extrabold tracking-widest text-[#fb7185] uppercase bg-pink-50 px-3 py-1.5 rounded-full border border-pink-100">Live Session Active</span>
+                    <h2 id="liveQuestionLabel" class="text-2xl md:text-3xl font-extrabold text-slate-900 font-serif max-w-xl">Active Word Clouds Question Display</h2>
+                    
+                    <div class="flex flex-wrap items-center justify-center md:justify-start gap-3 text-xs font-semibold text-slate-500">
+                        <span id="liveTimeRemaining" class="bg-amber-50 text-amber-700 px-3 py-1 rounded-md border border-amber-200 font-mono flex items-center gap-1.5">
+                            <i class="fa-solid fa-hourglass-start animate-spin"></i> Timer: Active
+                        </span>
+                        <!-- Toggle Button for stop/continue journey -->
+                        <button id="btnStopTimer" onclick="toggleCountdownTimer()" class="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-3.5 py-1.5 rounded-md transition-canva font-bold flex items-center gap-1.5 shadow-sm">
+                            <i class="fa-solid fa-circle-pause text-blue-500"></i> Stop Timing
+                        </button>
+                        <!-- Show/Hide weighted cloud size toggle button -->
+                        <button id="btnToggleReveal" onclick="toggleWeightReveal()" class="bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-3.5 py-1.5 rounded-md transition-canva font-bold flex items-center gap-1.5 shadow-sm">
+                            <i class="fa-solid fa-eye"></i> Show
+                        </button>
+                        <span>|</span>
+                        <span class="text-slate-400 font-medium">Database Engine: Synchronized</span>
+                    </div>
+                </div>
+
+                <!-- MIDDLE / RIGHT SIDE: GIANT PIN & QR CODE CONTAINER -->
+                <div class="flex flex-col md:flex-row items-center gap-6 bg-slate-50/50 p-6 rounded-2xl border border-slate-100/80">
+                    <div class="text-center md:text-right">
+                        <span class="text-[10px] font-extrabold text-slate-400 tracking-wider block uppercase">Interactive Room PIN</span>
+                        <h1 id="liveRoomPin" class="text-5xl md:text-6xl font-black text-slate-900 tracking-wider font-sans leading-none mt-1">0000</h1>
+                    </div>
+                    
+                    <!-- QR Box Trigger -->
+                    <div onclick="openFullscreenQR()" class="bg-white p-2.5 rounded-xl border border-slate-200 cursor-pointer transition-canva hover:scale-105 shadow-sm text-center">
+                        <img id="liveQrThumbnail" src="" class="w-16 h-16 object-contain" alt="Join session QR">
+                        <span class="text-[8px] font-bold text-slate-400 tracking-widest uppercase block mt-1"><i class="fa-solid fa-expand mr-1"></i>Click QR</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Grid Layout for Real-Time Canvas -->
+            <div id="wordCloudCanvasWrapper" class="bg-white rounded-3xl p-6 border border-slate-100 shadow-lg flex flex-col justify-center items-center relative h-[450px]">
+                <canvas id="wordCloudCanvas" class="w-full h-full max-h-[420px]"></canvas>
+            </div>
+
+            <!-- Presenter Status Footer -->
+            <div class="flex flex-col md:flex-row justify-between items-center gap-4 text-xs font-semibold">
+                <div class="bg-white px-5 py-3 rounded-full border border-slate-100 shadow-sm flex items-center gap-2">
+                    <span class="relative flex h-2.5 w-2.5">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                    </span>
+                    <span class="text-slate-600"><strong id="liveParticipantCount">0</strong> participants interactive</span>
+                </div>
+                
+                <!-- Presenter Controls (Added JPEG canvas screenshot triggers here) -->
+                <div class="flex items-center gap-2">
+                    <button onclick="downloadCanvasAsImage()" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border border-emerald-100 px-5 py-3 rounded-full transition-canva font-bold flex items-center gap-2 shadow-sm">
+                        <i class="fa-solid fa-download"></i> Download Cloud (.jpg)
+                    </button>
+                    <button onclick="terminateSessionPrompt()" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 px-5 py-3 rounded-full transition-canva font-bold flex items-center gap-2 shadow-sm">
+                        <i class="fa-solid fa-circle-stop"></i> End and Back Home
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 4. PARTICIPANT GAME PIN ENTER GATEWAY -->
+        <section id="participantPortalView" class="w-full max-w-sm bg-white p-8 rounded-3xl border border-slate-100 shadow-lg hidden space-y-6">
+            <div class="text-center space-y-2">
+                <h3 class="text-2xl font-bold font-serif text-slate-900">Enter Game PIN</h3>
+                <p class="text-xs text-slate-400">Submit your PIN to start adding brainstorming elements.</p>
+            </div>
+
+            <div class="space-y-4">
+                <input type="text" id="joinPinInput" placeholder="PIN" maxlength="4" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-center font-bold tracking-widest text-2xl focus:outline-none focus:ring-2 focus:ring-sky-200">
+                <button onclick="authenticateRoomPin()" class="w-full p-4 rounded-xl font-bold bg-[#121212] hover:bg-slate-800 text-white shadow-md transition-canva">Join Session</button>
+                <button onclick="goHome()" class="w-full text-center text-xs text-slate-400 hover:text-slate-600 font-bold tracking-wider">Back Home</button>
+            </div>
+        </section>
+
+        <!-- 5. ACTIVE PARTICIPANT MOBILE DASHBOARD -->
+        <section id="participantDashboardView" class="w-full max-w-md bg-white rounded-3xl border border-slate-100 shadow-xl hidden relative overflow-hidden">
+            <!-- Slide bar top decoration (Muted image_fc30ca.png layout aesthetics) -->
+            <div class="absolute top-0 left-0 right-0 h-1 flex">
+                <span class="flex-grow color-pastel-mint"></span>
+                <span class="flex-grow color-pastel-sky"></span>
+                <span class="flex-grow color-pastel-lavender"></span>
+            </div>
+
+            <!-- Dynamic UI elements -->
+            <div class="p-6 md:p-8 space-y-6">
+                <!-- TOP META ROW -->
+                <div class="flex justify-between items-start gap-4">
+                    <div class="space-y-1">
+                        <span class="text-[9px] font-extrabold text-sky-500 bg-sky-50 px-2.5 py-1 rounded-full border border-sky-100 uppercase tracking-wider">Poll Active</span>
+                        <h4 id="participantPromptText" class="text-base font-bold text-slate-800 font-serif leading-tight mt-1">Participant question loaded...</h4>
+                    </div>
+
+                    <!-- Submission Counter Badge (Requested Alignment Top-Right) -->
+                    <div class="bg-slate-50 border border-slate-100 px-3 py-2 rounded-xl text-center shrink-0">
+                        <span id="userSubCount" class="text-xl font-black text-slate-900 leading-none block">0</span>
+                        <span class="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mt-0.5">Submitted</span>
+                    </div>
+                </div>
+
+                <!-- PRIMARY WORD INPUT SECTION -->
+                <div id="submissionContainer" class="space-y-4">
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-xs font-semibold text-slate-400">
+                            <label class="uppercase tracking-wider">Enter word below (EN / TH)</label>
+                            <span id="wordCharCountDisplay">0/20</span>
+                        </div>
+                        <input type="text" id="participantWordInput" maxlength="20" placeholder="Type here..." class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-sky-200 text-slate-800">
+                    </div>
+
+                    <button onclick="submitWordToCloud()" id="btnSubmitWord" class="w-full p-4 rounded-xl font-bold bg-[#121212] hover:bg-slate-800 text-white shadow-sm transition-canva flex items-center justify-center gap-2">
+                        <i class="fa-regular fa-paper-plane text-xs"></i> Send Word
+                    </button>
+                    
+                    <p id="submissionError" class="text-xs text-red-500 font-medium text-center hidden"></p>
+                </div>
+
+                <!-- PREVIOUS WORDS DISPLAY SECTION (Feedback Adjustment) -->
+                <div class="border-t border-slate-100 pt-6 space-y-3">
+                    <h5 class="text-xs font-extrabold text-slate-400 uppercase tracking-widest">My Word History</h5>
+                    
+                    <div id="participantWordsHistory" class="flex flex-wrap gap-2 max-h-36 overflow-y-auto p-1 bg-slate-50/50 rounded-xl border border-slate-100 min-h-[50px] items-center justify-start content-start">
+                        <span class="text-xs text-slate-400 italic p-3 text-center w-full">Your submissions list will render here...</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ================= STREAMING_CHUNK: Setting up Modals and Footers ================= -->
+    <div id="fullscreenQrModal" class="fixed inset-0 bg-[#faf9f6]/95 backdrop-blur-md z-50 flex flex-col justify-center items-center hidden transition-canva" onclick="closeFullscreenQR()">
+        <div class="bg-white p-8 md:p-12 rounded-[2rem] border border-slate-100 shadow-2xl max-w-lg w-full text-center space-y-6 m-4" onclick="event.stopPropagation()">
+            <div class="space-y-1">
+                <span class="text-[10px] font-bold text-slate-400 tracking-widest uppercase block">Scan to participate</span>
+                <h3 class="text-2xl font-bold text-slate-900 font-serif">Join Word Cloud Session</h3>
+            </div>
+            
+            <img id="modalQrImg" src="" class="w-72 h-72 mx-auto rounded-2xl p-2 border border-slate-100" alt="Full-screen Join QR">
+            
+            <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100/50">
+                <span class="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Room PIN Code</span>
+                <h2 id="modalPinDisplay" class="text-5xl font-black text-slate-900 tracking-wider font-sans leading-none mt-1">0000</h2>
+            </div>
+            
+            <button onclick="closeFullscreenQR()" class="bg-[#121212] hover:bg-slate-800 text-white font-bold py-3.5 px-8 rounded-xl text-sm transition-canva shadow-sm">
+                Close Fullscreen
+            </button>
+        </div>
+    </div>
+
+    <!-- ================= FOOTER ================= -->
+    <footer class="bg-white border-t border-slate-100 py-6 px-6 text-center text-xs text-slate-400 font-medium">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-3">
+            <p>Word Clouds Workspace Platform &bull; Corporate Tool Blueprint</p>
+        </div>
+    </footer>
+
+    <!-- ================= STREAMING_CHUNK: Platform Router Script Logic ================= -->
+    <script>
+        // System variables
+        let selectedTimeLimitSeconds = 60; // default to 1 min
+        let activeRoomPin = "";
+        let hostQuestionText = "";
+        let countdownInterval = null;
+        let queryLoopInterval = null;
+        let localUserWordsHistory = [];
+        let participantSessionId = "usr_" + Math.random().toString(36).substring(2, 10);
+        let activeEngineMode = "LocalSimulation"; // 'LocalSimulation' or 'GoogleScript'
+        let revealWeightedCloud = false; // Toggle to show sized words
+        
+        // Dynamic countdown tracking for pause/resume journey
+        let dynamicTimeRemainingSeconds = 60;
+        let isTimerPaused = false;
+        let webAppUrl = ""; // Holds the correct deployment URL retrieved from gas engine
+        let dateSessionLaunched = null; // Tracks the start time for the archive datasheet logs
+
+        // Realtime synchronization channels
+        let broadcastChannel = null;
+
+        // Check if inside Google Apps Script iFrame
+        const isAppsScriptEnvironment = (typeof google !== 'undefined' && google.script && google.script.run);
+
+        window.addEventListener('DOMContentLoaded', () => {
+            configureAppMode();
+            setupLiveCharacterCounters();
+            selectTimeLimit(60, 'btn-1m'); // set default time pill
+            checkForInterruptedSessions();
+
+            // Parse URL Query parameters to auto-fill scanned PIN codes instantly
+            const urlParams = new URLSearchParams(window.location.search);
+            const pinParam = urlParams.get('pin');
+            if (pinParam) {
+                showParticipantPortal();
+                const pinInput = document.getElementById('joinPinInput');
+                if (pinInput) {
+                    pinInput.value = pinParam;
+                    // Trigger instant authentication with slight render buffer
+                    setTimeout(() => {
+                        authenticateRoomPin();
+                    }, 350);
+                }
+            }
+        });
+
+        // 1. ENVIRONMENT ROUTING
+        function configureAppMode() {
+            const workspaceInd = document.getElementById('workspaceIndicator');
+            const codeGuide = document.getElementById('gasCodeGuide');
+            const indicatorDot = document.getElementById('workspaceIndicatorDot');
+
+            if (isAppsScriptEnvironment) {
+                activeEngineMode = "GoogleScript";
+                workspaceInd.className = "p-2 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center";
+                indicatorDot.className = "w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse";
+                codeGuide.classList.add('hidden');
+
+                // Retrieve the correct live webapp deployment URL to prevent blank QR code scans
+                google.script.run.withSuccessHandler((url) => {
+                    webAppUrl = url;
+                }).getWebAppUrl();
+            } else {
+                activeEngineMode = "LocalSimulation";
+                workspaceInd.className = "p-2 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center";
+                indicatorDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse";
+                codeGuide.classList.remove('hidden');
+                
+                // Initialize modern BroadCastChannel sync system for multi-tab macOS testing
+                try {
+                    broadcastChannel = new BroadcastChannel('word_clouds_sync');
+                    broadcastChannel.onmessage = handleChannelIncoming;
+                } catch(e) {
+                    console.log("Local sync engine downgraded to mock database");
+                }
+            }
+        }
+
+        // 2. DISCONNECTION RECOVERY ENGINE
+        function checkForInterruptedSessions() {
+            const lastSession = localStorage.getItem('last_active_session');
+            if (lastSession) {
+                try {
+                    const sessionData = JSON.parse(lastSession);
+                    if (sessionData && sessionData.pin) {
+                        const banner = document.getElementById('autoRecoveryBanner');
+                        const label = document.getElementById('recoveryPinLabel');
+                        if (banner && label) {
+                            label.innerText = sessionData.pin;
+                            banner.classList.remove('hidden');
+                            banner.classList.add('flex');
+                        }
+                    }
+                } catch(err) {
+                    console.error("Failed to parse interrupted session logs.", err);
+                }
+            }
+        }
+
+        function dismissRecovery() {
+            localStorage.removeItem('last_active_session');
+            document.getElementById('autoRecoveryBanner').classList.add('hidden');
+        }
+
+        function performRecovery() {
+            const lastSession = localStorage.getItem('last_active_session');
+            if (!lastSession) return;
+            
+            try {
+                const sessionData = JSON.parse(lastSession);
+                document.getElementById('autoRecoveryBanner').classList.add('hidden');
+                
+                // Recover exact parameters
+                activeRoomPin = sessionData.pin;
+                hostQuestionText = sessionData.question;
+                selectedTimeLimitSeconds = sessionData.limit;
+                dynamicTimeRemainingSeconds = sessionData.timeRemaining;
+                isTimerPaused = sessionData.isPaused;
+                dateSessionLaunched = sessionData.dateLaunched || new Date().toISOString();
+
+                launchPresenterWithActiveState();
+            } catch(e) {
+                console.error("Could not recover session parameters.", e);
+            }
+        }
+
+        function switchSetupTab(tabName) {
+            const tabNew = document.getElementById('tabBtnNew');
+            const tabResume = document.getElementById('tabBtnResume');
+            const panelNew = document.getElementById('panelNewSession');
+            const panelResume = document.getElementById('panelResumeSession');
+
+            if (tabName === 'new') {
+                tabNew.className = "flex-1 pb-4 text-sm font-bold text-slate-800 border-b-2 border-slate-900 text-center transition-canva";
+                tabResume.className = "flex-1 pb-4 text-sm font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 text-center transition-canva";
+                panelNew.classList.remove('hidden');
+                panelResume.classList.add('hidden');
+            } else {
+                tabNew.className = "flex-1 pb-4 text-sm font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-600 text-center transition-canva";
+                tabResume.className = "flex-1 pb-4 text-sm font-bold text-slate-800 border-b-2 border-slate-900 text-center transition-canva";
+                panelNew.classList.add('hidden');
+                panelResume.classList.remove('hidden');
+            }
+        }
+
+        // Reconnect previously active PIN from setup dashboard tab
+        function attemptSessionResumption() {
+            const resumePin = document.getElementById('resumePinInput').value.trim();
+            if (!resumePin || resumePin.length < 4) {
+                alert("Please enter a valid 4-digit PIN to reconnect.");
+                return;
+            }
+
+            if (activeEngineMode === "GoogleScript") {
+                // Fetch direct from script execution
+                google.script.run.withSuccessHandler((res) => {
+                    if (res && res.question) {
+                        activeRoomPin = resumePin;
+                        hostQuestionText = res.question;
+                        selectedTimeLimitSeconds = res.limit || 60;
+                        dynamicTimeRemainingSeconds = selectedTimeLimitSeconds;
+                        isTimerPaused = false;
+                        dateSessionLaunched = new Date().toISOString();
+                        launchPresenterWithActiveState();
+                    } else {
+                        alert("Could not locate PIN: " + resumePin + " in the sheet database. Ensure participants have submitted at least 1 word first.");
+                    }
+                }).getHostLiveData(resumePin);
+            } else {
+                // Local simulation recovery from local mock logs
+                let localSessions = JSON.parse(localStorage.getItem('cloud_sessions') || '{}');
+                if (localSessions[resumePin]) {
+                    const session = localSessions[resumePin];
+                    activeRoomPin = resumePin;
+                    hostQuestionText = session.question;
+                    selectedTimeLimitSeconds = session.limit;
+                    dynamicTimeRemainingSeconds = selectedTimeLimitSeconds;
+                    isTimerPaused = false;
+                    dateSessionLaunched = new Date().toISOString();
+                    launchPresenterWithActiveState();
+                } else {
+                    // Fast override resume fallback for mock simulation testing
+                    activeRoomPin = resumePin;
+                    hostQuestionText = "Restored local session. Share word counts below!";
+                    selectedTimeLimitSeconds = 300;
+                    dynamicTimeRemainingSeconds = 300;
+                    isTimerPaused = false;
+                    dateSessionLaunched = new Date().toISOString();
+                    launchPresenterWithActiveState();
+                }
+            }
+        }
+
+        // Toggles Google script guides code copy blocks
+        function toggleCodeBlock() {
+            const block = document.getElementById('gasCodeContent');
+            block.classList.toggle('hidden');
+        }
+
+        // 3. COMPREHENSIVE VIEW ROUTING
+        function goHome() {
+            terminateActiveRoutines();
+            hideAllViews();
+            document.getElementById('roleSelectorView').classList.remove('hidden');
+            checkForInterruptedSessions();
+        }
+
+        // Show/Hide word counts on presentation board
+        function toggleWeightReveal() {
+            revealWeightedCloud = !revealWeightedCloud;
+            const btn = document.getElementById('btnToggleReveal');
+            if (revealWeightedCloud) {
+                btn.innerHTML = `<i class="fa-solid fa-eye-slash"></i> Hide`;
+                btn.className = "bg-purple-600 hover:bg-purple-700 text-white border border-purple-700 px-3.5 py-1.5 rounded-md transition-canva font-bold flex items-center gap-1.5 shadow-sm";
+            } else {
+                btn.innerHTML = `<i class="fa-solid fa-eye"></i> Show`;
+                btn.className = "bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-3.5 py-1.5 rounded-md transition-canva font-bold flex items-center gap-1.5 shadow-sm";
+            }
+            
+            // Re-render word cloud immediately with the updated sizing mode
+            if (activeEngineMode === "GoogleScript") {
+                syncGoogleSheetsBackend();
+            } else {
+                syncLocalSimulationEngine();
+            }
+        }
+
+        function showHostView() {
+            hideAllViews();
+            document.getElementById('hostSetupView').classList.remove('hidden');
+        }
+
+        function showParticipantPortal() {
+            hideAllViews();
+            document.getElementById('participantPortalView').classList.remove('hidden');
+        }
+
+        function hideAllViews() {
+            document.getElementById('roleSelectorView').classList.add('hidden');
+            document.getElementById('hostSetupView').classList.add('hidden');
+            document.getElementById('hostLiveMonitorView').classList.add('hidden');
+            document.getElementById('participantPortalView').classList.add('hidden');
+            document.getElementById('participantDashboardView').classList.add('hidden');
+        }
+
+        // Setup character counters dynamically
+        function setupLiveCharacterCounters() {
+            const qInput = document.getElementById('hostQuestion');
+            const pWord = document.getElementById('participantWordInput');
+
+            qInput.addEventListener('input', () => {
+                document.getElementById('charCountDisplay').innerText = `${qInput.value.length}/120`;
+            });
+
+            pWord.addEventListener('input', () => {
+                document.getElementById('wordCharCountDisplay').innerText = `${pWord.value.length}/20`;
+            });
+        }
+
+        // 4. HOST CONFIGURATION SCHEDULER
+        function selectTimeLimit(seconds, targetBtnId) {
+            selectedTimeLimitSeconds = seconds;
+            document.querySelectorAll('.time-btn').forEach(btn => {
+                btn.className = "time-btn p-3 rounded-xl border border-slate-200 text-xs font-semibold hover:bg-slate-50 hover:border-slate-400 transition-canva";
+            });
+            document.getElementById(targetBtnId).className = "time-btn p-3 rounded-xl text-xs font-semibold border border-transparent color-pastel-sky text-sky-800 hover:opacity-90 transition-canva shadow-sm";
+        }
+
+        // 5. LAUNCHING THE PRESENTER ENGINE
+        function launchPresenterScreen(isResumed = false) {
+            const questionVal = document.getElementById('hostQuestion').value.trim();
+            if (!questionVal) {
+                alert("Please enter a question or topic before launching.");
+                return;
+            }
+
+            hostQuestionText = questionVal;
+            // Generate standard Kahoot PIN
+            activeRoomPin = Math.floor(1000 + Math.random() * 9000).toString();
+            dynamicTimeRemainingSeconds = selectedTimeLimitSeconds;
+            isTimerPaused = false;
+            dateSessionLaunched = new Date().toISOString();
+            revealWeightedCloud = false; // Reset sizing to uniform on launch
+
+            const btn = document.getElementById('btnToggleReveal');
+            if (btn) {
+                btn.innerHTML = `<i class="fa-solid fa-eye"></i> Show`;
+                btn.className = "bg-purple-50 hover:bg-purple-100 text-purple-600 border border-purple-200 px-3.5 py-1.5 rounded-md transition-canva font-bold flex items-center gap-1.5 shadow-sm";
+            }
+
+            launchPresenterWithActiveState();
+        }
+
+        // Direct implementation module to render Presenter dashboard
+        function launchPresenterWithActiveState() {
+            // Populate Presenter panel data
+            document.getElementById('liveQuestionLabel').innerText = hostQuestionText;
+            document.getElementById('liveRoomPin').innerText = activeRoomPin;
+            document.getElementById('modalPinDisplay').innerText = activeRoomPin;
+
+            // Compile the correct deployment address
+            const manualOverrideUrl = document.getElementById('customWebAppUrl')?.value.trim();
+            let baseLoc = manualOverrideUrl || webAppUrl || window.location.href;
+            
+            if (!manualOverrideUrl && (baseLoc.includes("about:srcdoc") || baseLoc.startsWith("data:") || baseLoc.includes("sandbox") || !baseLoc.includes("script.google.com"))) {
+                baseLoc = "https://airasia-wordclouds.web.app/";
+            }
+            
+            let joinUrl = baseLoc.split('?')[0] + "?pin=" + activeRoomPin;
+            
+            // Render QR Codes safely
+            let qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=" + encodeURIComponent(joinUrl);
+            let backupQrUrl = "https://quickchart.io/chart?cht=qr&chs=350x350&chl=" + encodeURIComponent(joinUrl);
+
+            const thumbImg = document.getElementById('liveQrThumbnail');
+            const modalImg = document.getElementById('modalQrImg');
+
+            thumbImg.onerror = function() {
+                this.src = backupQrUrl;
+                this.onerror = null;
+            };
+            modalImg.onerror = function() {
+                this.src = backupQrUrl;
+                this.onerror = null;
+            };
+
+            thumbImg.src = qrUrl;
+            modalImg.src = qrUrl;
+
+            // Shift Viewports
+            hideAllViews();
+            document.getElementById('hostLiveMonitorView').classList.remove('hidden');
+
+            // Render live canvas
+            resetWordCloudCanvas([]);
+
+            // Launch active timer countdown loop
+            startTimerCountdownLoop();
+
+            // Cache current state locally to allow instant reconnection/resumption if closed accidentally
+            saveHostStateBackup();
+
+            // Launch database pooling sync loop
+            if (activeEngineMode === "GoogleScript") {
+                queryLoopInterval = setInterval(syncGoogleSheetsBackend, 3000);
+            } else {
+                queryLoopInterval = setInterval(syncLocalSimulationEngine, 2500);
+                
+                // Track sessions globally in localStorage for mock simulations
+                let sessions = JSON.parse(localStorage.getItem('cloud_sessions') || '{}');
+                sessions[activeRoomPin] = { question: hostQuestionText, limit: selectedTimeLimitSeconds, dateLaunched: dateSessionLaunched };
+                localStorage.setItem('cloud_sessions', JSON.stringify(sessions));
+
+                // Broadcast live creation
+                broadcastMessage('ROOM_CREATED', {
+                    pin: activeRoomPin,
+                    question: hostQuestionText,
+                    limit: selectedTimeLimitSeconds
+                });
+            }
+        }
+
+        // Save session context to localStorage backup slot
+        function saveHostStateBackup() {
+            const backupData = {
+                pin: activeRoomPin,
+                question: hostQuestionText,
+                limit: selectedTimeLimitSeconds,
+                timeRemaining: dynamicTimeRemainingSeconds,
+                isPaused: isTimerPaused,
+                dateLaunched: dateSessionLaunched
+            };
+            localStorage.setItem('last_active_session', JSON.stringify(backupData));
+        }
+
+        // Countdown Timer Engine
+        function startTimerCountdownLoop() {
+            const timerLabel = document.getElementById('liveTimeRemaining');
+            const stopBtn = document.getElementById('btnStopTimer');
+            
+            // Clean active loop if any exists
+            if (countdownInterval) clearInterval(countdownInterval);
+
+            // Configure visual elements to "Stop Timing" state
+            if (stopBtn) {
+                stopBtn.disabled = false;
+                stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                if (isTimerPaused) {
+                    stopBtn.innerHTML = `<i class="fa-solid fa-play text-emerald-500 animate-pulse"></i> Click to Continue`;
+                } else {
+                    stopBtn.innerHTML = `<i class="fa-solid fa-circle-pause text-blue-500"></i> Stop Timing`;
+                }
+            }
+
+            if (isTimerPaused) {
+                timerLabel.className = "bg-yellow-50 text-yellow-700 px-3 py-1 rounded-md border border-yellow-200 font-mono flex items-center gap-1.5";
+            } else {
+                timerLabel.className = "bg-amber-50 text-amber-700 px-3 py-1 rounded-md border border-amber-200 font-mono flex items-center gap-1.5";
+            }
+
+            countdownInterval = setInterval(() => {
+                // If paused, maintain interval loops but do not decrement values
+                if (isTimerPaused) {
+                    saveHostStateBackup();
+                    return;
+                }
+
+                let minutes = Math.floor(dynamicTimeRemainingSeconds / 60);
+                let seconds = dynamicTimeRemainingSeconds % 60;
+                timerLabel.innerHTML = `<i class="fa-solid fa-hourglass-start animate-spin"></i> Timer: ${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+
+                // Back up current timer offset dynamically to enable flawless crash recoveries
+                saveHostStateBackup();
+
+                if (dynamicTimeRemainingSeconds <= 0) {
+                    clearInterval(countdownInterval);
+                    timerLabel.innerHTML = `<i class="fa-solid fa-lock text-red-500"></i> Poll Expired (Locked)`;
+                    timerLabel.className = "bg-red-50 text-red-700 px-3 py-1 rounded-md border border-red-200 font-mono flex items-center gap-1.5";
+                    
+                    // Auto reveal sized counts on timer expiration
+                    revealWeightedCloud = true;
+                    const btn = document.getElementById('btnToggleReveal');
+                    if (btn) {
+                        btn.innerHTML = `<i class="fa-solid fa-eye-slash"></i> Hide`;
+                        btn.className = "bg-purple-600 hover:bg-purple-700 text-white border border-purple-700 px-3.5 py-1.5 rounded-md transition-canva font-bold flex items-center gap-1.5 shadow-sm";
+                    }
+                    if (activeEngineMode === "GoogleScript") {
+                        syncGoogleSheetsBackend();
+                    } else {
+                        syncLocalSimulationEngine();
+                    }
+
+                    // Freeze further database pooling loop
+                    clearInterval(queryLoopInterval);
+
+                    // Remove current restore caches as the game is finished
+                    localStorage.removeItem('last_active_session');
+
+                    // Broadcast session end locally
+                    if (broadcastChannel) {
+                        broadcastMessage('ROOM_LOCKED', { pin: activeRoomPin });
+                    }
+                    
+                    // Disable timer controls on natural timeout
+                    if (stopBtn) {
+                        stopBtn.disabled = true;
+                        stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                        stopBtn.innerHTML = `<i class="fa-solid fa-check text-slate-400"></i> Stopped`;
+                    }
+                }
+                dynamicTimeRemainingSeconds--;
+            }, 1000);
+        }
+
+        // Click to "Stop Timing" / "Click to Continue" toggle workflow loop
+        function toggleCountdownTimer() {
+            const stopBtn = document.getElementById('btnStopTimer');
+            const timerLabel = document.getElementById('liveTimeRemaining');
+
+            if (!isTimerPaused) {
+                // Journey Step 1 & 2: Pause Timer action
+                isTimerPaused = true;
+                timerLabel.innerHTML = `<i class="fa-solid fa-circle-pause text-amber-500 animate-pulse"></i> Timer: Stopped`;
+                timerLabel.className = "bg-yellow-50 text-yellow-700 px-3 py-1 rounded-md border border-yellow-200 font-mono flex items-center gap-1.5";
+                
+                // Show "Click to Continue" label and provide a pulsing accent look
+                if (stopBtn) {
+                    stopBtn.innerHTML = `<i class="fa-solid fa-play text-emerald-500 animate-pulse"></i> Click to Continue`;
+                }
+            } else {
+                // Journey Step 3 & 4: Resume Timer action
+                isTimerPaused = false;
+                timerLabel.className = "bg-amber-50 text-amber-700 px-3 py-1 rounded-md border border-amber-200 font-mono flex items-center gap-1.5";
+                
+                // Revert text to "Stop Timing" label
+                if (stopBtn) {
+                    stopBtn.innerHTML = `<i class="fa-solid fa-circle-pause text-blue-500"></i> Stop Timing`;
+                }
+            }
+            saveHostStateBackup();
+        }
+
+        // 6. HIGH RESOLUTION JPEG EXPORT MODULE
+        function downloadCanvasAsImage(silent = false) {
+            return new Promise((resolve, reject) => {
+                const canvas = document.getElementById('wordCloudCanvas');
+                if (!canvas) {
+                    if (!silent) alert("Canvas render reference was lost.");
+                    reject("Canvas reference lost");
+                    return;
+                }
+
+                try {
+                    // Create offscreen container canvas buffer with absolute solid white backdrop
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = canvas.width;
+                    tempCanvas.height = canvas.height;
+                    const ctx = tempCanvas.getContext('2d');
+
+                    // Fill background
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+                    // Draw word cloud canvas visual content on top of offscreen buffer
+                    ctx.drawImage(canvas, 0, 0);
+
+                    // Convert canvas context to high-fidelity JPEG format
+                    const imgDataUrl = tempCanvas.toDataURL('image/jpeg', 0.95);
+
+                    // Setup dynamic anchor element to trigger download action automatically on Mac
+                    const link = document.createElement('a');
+                    link.download = `WordCloud_PIN_${activeRoomPin || 'Interactive_Session'}.jpg`;
+                    link.href = imgDataUrl;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    resolve(imgDataUrl);
+                } catch(err) {
+                    console.error("Canvas export failed:", err);
+                    if (!silent) alert("Failed to export Canvas. If hosting inside a secured environment, browser cross-origin policy may restrict canvas extractions.");
+                    reject(err);
+                }
+            });
+        }
+
+        // End presentation routine
+        function terminateSessionPrompt() {
+            const confirmMsg = "Are you sure you want to end this live presentation session? Your word cloud image will be saved automatically to your downloads folder, and archived into the spreadsheet.";
+            if (confirm(confirmMsg)) {
+                autoSaveAndArchiveSession();
+            }
+        }
+
+        // Automatically saves word cloud image locally and archives data to Google Sheet before leaving
+        async function autoSaveAndArchiveSession() {
+            // Display saving/loading status indicator
+            const timerLabel = document.getElementById('liveTimeRemaining');
+            if (timerLabel) {
+                timerLabel.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> Saving & Archiving...`;
+                timerLabel.className = "bg-sky-50 text-sky-700 px-3 py-1 rounded-md border border-sky-200 font-mono flex items-center gap-1.5";
+            }
+
+            try {
+                // Ensure cloud displays sizes on final export summary
+                revealWeightedCloud = true;
+                if (activeEngineMode === "GoogleScript") {
+                    syncGoogleSheetsBackend();
+                } else {
+                    syncLocalSimulationEngine();
+                }
+                
+                // Add minor redraw delay to capture weighted sizing values accurately
+                await new Promise(r => setTimeout(r, 600));
+
+                // 1. Always save screenshot JPEG file locally (Requirements 1 & 2)
+                const imgDataUrl = await downloadCanvasAsImage(true);
+
+                // 2. Archive metadata and visual image screenshot to the "GameArchive" sheet if Workspace is active
+                if (activeEngineMode === "GoogleScript" && isAppsScriptEnvironment) {
+                    const startTimestamp = dateSessionLaunched || new Date().toISOString();
+                    
+                    google.script.run.withSuccessHandler((res) => {
+                        console.log("Archive saved in Google Sheets:", res);
+                        completeExitFlow();
+                    }).withFailureHandler((err) => {
+                        console.error("Failed to archive in Sheets:", err);
+                        completeExitFlow();
+                    }).saveSessionSummary(activeRoomPin, hostQuestionText, selectedTimeLimitSeconds, startTimestamp, imgDataUrl);
+                } else {
+                    // Local Simulation: Save base64 image summary to localStorage
+                    try {
+                        localStorage.setItem(`archive_session_img_${activeRoomPin}`, imgDataUrl);
+                    } catch(e) {
+                        console.warn("Local storage quota limit exceeded, stored textual logs only.");
+                    }
+                    completeExitFlow();
+                }
+            } catch (err) {
+                console.error("Error during automated exit sequence:", err);
+                completeExitFlow(); // Ensure the host still returns home if canvas export is blocked
+            }
+        }
+
+        function completeExitFlow() {
+            localStorage.removeItem('last_active_session');
+            goHome();
+        }
+
+        // Presenter Full-screen QR code toggles
+        function openFullscreenQR() {
+            document.getElementById('fullscreenQrModal').classList.remove('hidden');
+        }
+
+        function closeFullscreenQR() {
+            document.getElementById('fullscreenQrModal').classList.add('hidden');
+        }
+
+        // 7. PARTICIPANT GAME LOGIN PROCEDURES
+        function authenticateRoomPin() {
+            const pinVal = document.getElementById('joinPinInput').value.trim();
+            if (!pinVal || pinVal.length < 4) {
+                alert("Please enter a valid 4-digit PIN.");
+                return;
+            }
+
+            if (activeEngineMode === "GoogleScript") {
+                // Fetch direct from script execution
+                google.script.run.withSuccessHandler((res) => {
+                    if (res && res.words) {
+                        launchParticipantConsole(pinVal, res.question || "Workspace Discussion Group Session active on Host Terminal.");
+                    } else {
+                        alert("We couldn't locate Room PIN: " + pinVal + ". Please verify with host.");
+                    }
+                }).getHostLiveData(pinVal);
+            } else {
+                // Broadcast local inquiry for multi-tab
+                broadcastMessage('PING_ROOM', { pin: pinVal });
+                // Check local storage mock database table
+                let localSessions = JSON.parse(localStorage.getItem('cloud_sessions') || '{}');
+                if (localSessions[pinVal]) {
+                    launchParticipantConsole(pinVal, localSessions[pinVal].question);
+                } else {
+                    // Fallback to simulator simulation instantly for local ease of testing
+                    launchParticipantConsole(pinVal, "Describe your team's top goal this month in a single word.");
+                }
+            }
+        }
+
+        function launchParticipantConsole(pin, questionText) {
+            activeRoomPin = pin;
+            hostQuestionText = questionText;
+
+            document.getElementById('participantPromptText').innerText = questionText;
+            
+            // Clean local variables
+            localUserWordsHistory = [];
+            document.getElementById('userSubCount').innerText = "0";
+            document.getElementById('participantWordsHistory').innerHTML = `<span class="text-xs text-slate-400 italic p-3 text-center w-full">Your submissions list will render here...</span>`;
+
+            hideAllViews();
+            document.getElementById('participantDashboardView').classList.remove('hidden');
+        }
+
+        // Participant submits text to Cloud (unlimited count, max 20 chars per input)
+        function submitWordToCloud() {
+            const inputField = document.getElementById('participantWordInput');
+            const cleanWord = inputField.value.trim().replace(/\s+/g, ' '); // Clean multiple spaces
+            const errField = document.getElementById('submissionError');
+
+            errField.classList.add('hidden');
+
+            if (!cleanWord) {
+                showSubmissionError("Please write a valid word before sending.");
+                return;
+            }
+
+            // Word length constraint check (Thai and English compatible)
+            if (cleanWord.length > 20) {
+                showSubmissionError("The input exceeds the 20-character limit.");
+                return;
+            }
+
+            // Lock submission button UI during action
+            const btn = document.getElementById('btnSubmitWord');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> Submitting...`;
+
+            if (activeEngineMode === "GoogleScript") {
+                google.script.run.withSuccessHandler((res) => {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i class="fa-regular fa-paper-plane text-xs"></i> Send Word`;
+                    
+                    if (res && res.status === "success") {
+                        commitWordUiUpdate(cleanWord);
+                    } else {
+                        showSubmissionError(res.message || "Failed to commit data to Google Sheet.");
+                    }
+                }).submitParticipantWord(activeRoomPin, hostQuestionText, selectedTimeLimitSeconds, cleanWord, participantSessionId);
+            } else {
+                // Write locally to simulated storage block
+                let localDb = JSON.parse(localStorage.getItem('cloud_submissions') || '[]');
+                localDb.push({
+                    pin: activeRoomPin,
+                    question: hostQuestionText,
+                    timestamp: new Date().toISOString(),
+                    word: cleanWord,
+                    participantId: participantSessionId
+                });
+                localStorage.setItem('cloud_submissions', JSON.stringify(localDb));
+
+                // Broadcast local transaction over the live synchronization pipeline
+                broadcastMessage('SUBMIT_WORD', {
+                    pin: activeRoomPin,
+                    word: cleanWord,
+                    participantId: participantSessionId
+                });
+
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i class="fa-regular fa-paper-plane text-xs"></i> Send Word`;
+                    commitWordUiUpdate(cleanWord);
+                }, 400); // realistic mock latency delay
+            }
+        }
+
+        function commitWordUiUpdate(word) {
+            // Add word to user history array
+            localUserWordsHistory.push(word);
+            document.getElementById('userSubCount').innerText = localUserWordsHistory.length;
+
+            // Clear input context and restore character counter UI state
+            const inputField = document.getElementById('participantWordInput');
+            inputField.value = "";
+            document.getElementById('wordCharCountDisplay').innerText = "0/20";
+
+            // Refresh UI list displaying previous words with pastel colorful badge themes (Feedback requested)
+            refreshUserWordsHistoryUi();
+        }
+
+        function refreshUserWordsHistoryUi() {
+            const historyContainer = document.getElementById('participantWordsHistory');
+            
+            if (localUserWordsHistory.length === 0) {
+                historyContainer.innerHTML = `<span class="text-xs text-slate-400 italic p-3 text-center w-full">Your submissions list will render here...</span>`;
+                return;
+            }
+
+            const badgesList = [
+                'color-pastel-coral text-red-800 border-red-200',
+                'color-pastel-peach text-orange-800 border-orange-200',
+                'color-pastel-yellow text-yellow-800 border-yellow-200',
+                'color-pastel-mint text-emerald-800 border-emerald-200',
+                'color-pastel-sky text-sky-800 border-sky-200',
+                'color-pastel-lavender text-indigo-800 border-indigo-200'
+            ];
+
+            historyContainer.innerHTML = localUserWordsHistory.map((w, index) => {
+                let badgeClass = badgesList[index % badgesList.length];
+                return `<span class="px-3.5 py-1.5 rounded-full text-xs font-semibold border ${badgeClass} shadow-sm animate-pulse transition-canva">${w}</span>`;
+            }).join('');
+        }
+
+        function showSubmissionError(msg) {
+            const errField = document.getElementById('submissionError');
+            errField.innerText = msg;
+            errField.classList.remove('hidden');
+        }
+
+        // ================= STREAMING_CHUNK: Synchronization & Word Cloud Rendering Logic =================
+        function syncGoogleSheetsBackend() {
+            google.script.run.withSuccessHandler((res) => {
+                if (res) {
+                    document.getElementById('liveParticipantCount').innerText = res.participantCount;
+                    // Format weights visually: uniform base size of 24px unless revealed, then base size of 28px + 14px scaling
+                    let cloudArray = res.words.map(item => {
+                        let finalSize = 24; // Uniform default size
+                        if (revealWeightedCloud) {
+                            finalSize = 28 + (item[1] - 1) * 14;
+                        }
+                        return [item[0], finalSize];
+                    });
+                    resetWordCloudCanvas(cloudArray);
+                }
+            }).getHostLiveData(activeRoomPin);
+        }
+
+        function syncLocalSimulationEngine() {
+            let localDb = JSON.parse(localStorage.getItem('cloud_submissions') || '[]');
+            let wordCounts = {};
+            let uniqueParticipants = new Set();
+
+            localDb.forEach(item => {
+                if (item.pin.toString() === activeRoomPin.toString()) {
+                    let cleanWord = item.word.toLowerCase().trim();
+                    wordCounts[cleanWord] = (wordCounts[cleanWord] || 0) + 1;
+                    uniqueParticipants.add(item.participantId);
+                }
+            });
+
+            document.getElementById('liveParticipantCount').innerText = uniqueParticipants.size;
+
+            let finalCloudArray = [];
+            for (let word in wordCounts) {
+                // Sizing algorithm: uniform 24px unless revealed, then 28px + 14px scaling
+                let finalSize = 24; // Uniform default size
+                if (revealWeightedCloud) {
+                    finalSize = 28 + (wordCounts[word] - 1) * 14;
+                }
+                finalCloudArray.push([word, finalSize]);
+            }
+            resetWordCloudCanvas(finalCloudArray);
+        }
+
+        function resetWordCloudCanvas(wordList) {
+            const canvas = document.getElementById('wordCloudCanvas');
+            const parent = canvas.parentElement;
+            
+            // Recalculate dynamic container sizing safely
+            canvas.width = parent.clientWidth - 40;
+            canvas.height = parent.clientHeight - 40;
+
+            // Bright theme colors sampled directly from the vibrant blocks of Screenshot 2569-06-18
+            const cloudThemeColors = [
+                '#ff3b30', // Vibrant Primary Red
+                '#ff53a0', // Bright Neon Pink
+                '#ffcc00', // Bright Yellow-Gold
+                '#00c853', // Vivid Emerald Green
+                '#33b5e5', // Sky Cyan-Blue
+                '#8147ff'  // Vibrant Electric Purple
+            ];
+
+            try {
+                WordCloud(canvas, {
+                    list: wordList,
+                    gridSize: 6, // Smaller packing grid allows single words to render immediately
+                    weightFactor: 1, // Weights are direct pixel values calculated beforehand
+                    fontFamily: 'IBM Plex Sans Thai, sans-serif',
+                    fontWeight: '800',
+                    color: () => {
+                        return cloudThemeColors[Math.floor(Math.random() * cloudThemeColors.length)];
+                    },
+                    backgroundColor: '#ffffff', // Premium minimalist white backdrop
+                    rotateRatio: 0.15,
+                    rotationSteps: 2,
+                    minSize: 14,
+                    drawOutOfBound: true, // Prevents wordcloud2 from dropping single-occurrence words
+                    shuffle: false
+                });
+            } catch(err) {
+                console.log("Canvas render step skipped: ", err);
+            }
+        }
+
+        // MULTI-TAB SYNC INTERFACE (BroadcastChannel Messaging Protocols)
+        function broadcastMessage(actionType, actionPayload) {
+            if (broadcastChannel) {
+                broadcastChannel.postMessage({
+                    type: actionType,
+                    payload: actionPayload
+                });
+            }
+        }
+
+        function handleChannelIncoming(msgEvent) {
+            const message = msgEvent.data;
+            if (!message) return;
+
+            switch(message.type) {
+                case 'PING_ROOM':
+                    // If Host window is open, acknowledge existence
+                    if (document.getElementById('hostLiveMonitorView').classList.contains('hidden') === false && activeRoomPin === message.payload.pin) {
+                        broadcastMessage('ACK_ROOM', {
+                            pin: activeRoomPin,
+                            question: hostQuestionText
+                        });
+                    }
+                    break;
+
+                case 'ACK_ROOM':
+                    // If participant is waiting on confirmation
+                    if (document.getElementById('participantPortalView').classList.contains('hidden') === false) {
+                        const codePin = document.getElementById('joinPinInput').value.trim();
+                        if (codePin === message.payload.pin) {
+                            launchParticipantConsole(message.payload.pin, message.payload.question);
+                        }
+                    }
+                    break;
+
+                case 'ROOM_LOCKED':
+                    if (activeRoomPin === message.payload.pin && document.getElementById('participantDashboardView').classList.contains('hidden') === false) {
+                        document.getElementById('submissionContainer').innerHTML = `
+                            <div class="bg-amber-50 text-amber-700 p-4 rounded-2xl border border-amber-200 text-sm font-semibold text-center space-y-2">
+                                <i class="fa-solid fa-lock text-lg"></i>
+                                <p>The live timer for this session has expired. Submissions are now closed.</p>
+                            </div>
+                        `;
+                    }
+                    break;
+            }
+        }
+
+        function terminateActiveRoutines() {
+            if (countdownInterval) clearInterval(countdownInterval);
+            if (queryLoopInterval) clearInterval(queryLoopInterval);
+            countdownInterval = null;
+            queryLoopInterval = null;
+        }
+    </script>
+</body>
+</html>
